@@ -94,6 +94,27 @@ const ROOM_IDS = ['A','B','C','D'];
 // 「先に画面を描く→裏で最新データを取りに行く」ことで、体感速度を上げます。
 let cachedRooms = null;
 
+// ---- 一時的な診断ログ（原因特定用。解決したら削除してOK） ----
+let debugLog = [];
+let debugStartTime = performance.now();
+function logDebug(msg){
+  const t = (performance.now() - debugStartTime) / 1000;
+  debugLog.push(t.toFixed(2) + '秒: ' + msg);
+  if (debugLog.length > 10) debugLog.shift();
+  renderDebugPanel();
+}
+function renderDebugPanel(){
+  let panel = document.getElementById('debug-panel');
+  if (!panel){
+    panel = document.createElement('div');
+    panel.id = 'debug-panel';
+    panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.85);color:#0f0;font-size:10px;font-family:monospace;padding:8px;z-index:9999;max-height:35vh;overflow-y:auto;white-space:pre-wrap;';
+    document.body.appendChild(panel);
+  }
+  panel.textContent = debugLog.join('\n');
+}
+// ---- ここまで診断ログ ----
+
 function formatDate(iso){
   if(!iso) return '未使用';
   return new Date(iso).toLocaleString('ja-JP', {
@@ -127,6 +148,7 @@ async function fetchToggle(room){
 // ---- 描画のみを行う関数（通信しない・即座に反映） ----
 
 function paintStatus(rooms){
+  logDebug('paintStatus実行（一覧を描画）');
   const app = document.getElementById('app');
   app.innerHTML = `
     <div class="wrap">
@@ -137,7 +159,7 @@ function paintStatus(rooms){
         ${rooms.map(r => {
           const isUsing = r.status === 'using';
           return `
-            <div class="row" onclick="toggleRoom('${r.id}')">
+            <div class="row" onclick="toggleRoomFromList('${r.id}')">
               <div class="letter">${r.id}</div>
               <div class="row-mid">
                 <div class="room-name">部屋 ${r.id}</div>
@@ -175,13 +197,13 @@ function paintRoom(roomId, msgOn){
         <div class="dot"></div>${isUsing ? '利用中' : '空き'}
       </div>
       <div>
-        <button id="toggle-btn" class="toggle-btn ${isUsing ? 'to-free' : 'to-busy'}" onclick="toggleRoom('${room.id}')">
+        <button id="toggle-btn" class="toggle-btn ${isUsing ? 'to-free' : 'to-busy'}" onclick="logDebug('トグルボタンをタップ検知');toggleRoomFromDetail('${room.id}')">
           ${isUsing ? '利用終了にする' : '利用開始にする'}
         </button>
       </div>
       <div class="msg">${msgOn ? '更新しました' : ''}</div>
       <div class="detail-updated">更新: ${formatDate(room.updatedAt)}</div>
-      <div><a class="back" href="#status">一覧に戻る</a></div>
+      <div><a class="back" href="#status" onclick="logDebug('戻るリンクをタップ検知')">一覧に戻る</a></div>
     </div>
   `;
 }
@@ -226,25 +248,67 @@ function paintQr(){
 
 // ---- 通信を伴う操作 ----
 
-// トグル操作:先にキャッシュ上のデータを書き換えて即座に画面を更新し、
-// 裏でサーバーに反映します（楽観的UI更新）。これで体感速度が上がります。
-async function toggleRoom(id){
+// キャッシュ上のデータを書き換えつつサーバーにも反映する共通処理（描画は行わない）
+async function performToggle(id){
+  if (!cachedRooms){
+    await loadRooms();
+  }
+  const now = new Date().toISOString();
+  cachedRooms = cachedRooms.map(r => r.id === id
+    ? { ...r, status: r.status === 'empty' ? 'using' : 'empty', updatedAt: now }
+    : r
+  );
+  try{
+    const updated = await fetchToggle(id);
+    cachedRooms = cachedRooms.map(r => r.id === id ? updated : r);
+  }catch(e){
+    try{ await loadRooms(); }catch(e2){}
+    alert('更新に失敗しました。もう一度お試しください。');
+  }
+}
+
+// 一覧画面での行タップ：一覧画面に留まったまま、その行だけを更新する
+async function toggleRoomFromList(id){
+  if (!cachedRooms) return;
+  const now = new Date().toISOString();
+  cachedRooms = cachedRooms.map(r => r.id === id
+    ? { ...r, status: r.status === 'empty' ? 'using' : 'empty', updatedAt: now }
+    : r
+  );
+  paintStatus(cachedRooms); // 即座に反映（一覧のまま）
+
+  try{
+    const updated = await fetchToggle(id);
+    cachedRooms = cachedRooms.map(r => r.id === id ? updated : r);
+    if (getRoute().page === 'status') paintStatus(cachedRooms);
+  }catch(e){
+    try{ await loadRooms(); }catch(e2){}
+    if (getRoute().page === 'status') paintStatus(cachedRooms);
+    alert('更新に失敗しました。もう一度お試しください。');
+  }
+}
+
+// 部屋詳細画面でのボタンタップ：詳細画面に留まったまま切り替える
+async function toggleRoomFromDetail(id){
+  logDebug('toggleRoomFromDetail開始 id=' + id);
   if (!cachedRooms){
     try{ await loadRooms(); }catch(e){ alert('データの取得に失敗しました'); return; }
   }
-
   const now = new Date().toISOString();
   cachedRooms = cachedRooms.map(r => r.id === id
     ? { ...r, status: r.status === 'empty' ? 'using' : 'empty', updatedAt: now }
     : r
   );
   paintRoom(id, true);
+  logDebug('楽観的更新の描画完了');
 
   try{
+    logDebug('fetchToggle開始');
     const updated = await fetchToggle(id);
+    logDebug('fetchToggle成功で応答');
     cachedRooms = cachedRooms.map(r => r.id === id ? updated : r);
   }catch(e){
-    // 失敗時は最新状態を取り直して表示をサーバーの実態に合わせる
+    logDebug('fetchToggle失敗: ' + e.message);
     try{ await loadRooms(); }catch(e2){}
     alert('更新に失敗しました。もう一度お試しください。');
   }
@@ -316,7 +380,7 @@ async function bootstrap(){
     sessionStorage.removeItem('rsb-internal-nav');
     if (!cameFromApp){
       try{ await loadRooms(); }catch(e){}
-      await toggleRoom(route.room);
+      await toggleRoomFromDetail(route.room);
       return;
     }
   }
@@ -324,6 +388,7 @@ async function bootstrap(){
 }
 
 window.addEventListener('hashchange', () => {
+  logDebug('hashchangeイベント発生 hash=' + location.hash);
   sessionStorage.setItem('rsb-internal-nav', '1');
   render();
 });
