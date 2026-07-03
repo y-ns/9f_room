@@ -90,6 +90,10 @@
 <script>
 const ROOM_IDS = ['A','B','C','D'];
 
+// 直近に取得した部屋データのキャッシュ。
+// 「先に画面を描く→裏で最新データを取りに行く」ことで、体感速度を上げます。
+let cachedRooms = null;
+
 function formatDate(iso){
   if(!iso) return '未使用';
   return new Date(iso).toLocaleString('ja-JP', {
@@ -106,11 +110,12 @@ function getRoute(){
   return { page:'status' };
 }
 
-async function fetchStatus(){
+async function loadRooms(){
   const res = await fetch('/api/status');
   if (!res.ok) throw new Error('status fetch failed');
   const data = await res.json();
-  return data.rooms;
+  cachedRooms = data.rooms;
+  return cachedRooms;
 }
 
 async function fetchToggle(room){
@@ -119,90 +124,69 @@ async function fetchToggle(room){
   return await res.json();
 }
 
-async function toggleRoom(id){
-  const btn = document.getElementById('toggle-btn');
-  if (btn) btn.disabled = true;
-  try{
-    await fetchToggle(id);
-    await renderRoom(id, true);
-    setTimeout(() => renderRoom(id, false), 1500);
-  }catch(e){
-    alert('更新に失敗しました。もう一度お試しください。');
-    if (btn) btn.disabled = false;
-  }
-}
+// ---- 描画のみを行う関数（通信しない・即座に反映） ----
 
-async function renderStatus(){
+function paintStatus(rooms){
   const app = document.getElementById('app');
-  try{
-    const rooms = await fetchStatus();
-    app.innerHTML = `
-      <div class="wrap">
-        <div class="eyebrow">9F ・ BREAK ROOM STATUS</div>
-        <div class="title">休憩室 利用状況</div>
-        <div class="sub">タップして状況を切り替え</div>
-        <div class="board">
-          ${rooms.map(r => {
-            const isUsing = r.status === 'using';
-            return `
-              <div class="row" onclick="toggleRoom('${r.id}')">
-                <div class="letter">${r.id}</div>
-                <div class="row-mid">
-                  <div class="room-name">部屋 ${r.id}</div>
-                  <div class="updated">更新: ${formatDate(r.updatedAt)}</div>
-                </div>
-                <div class="pill ${isUsing ? 'busy' : 'free'}">
-                  <div class="dot"></div>${isUsing ? '利用中' : '空き'}
-                </div>
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="eyebrow">9F ・ BREAK ROOM STATUS</div>
+      <div class="title">休憩室 利用状況</div>
+      <div class="sub">タップして状況を切り替え</div>
+      <div class="board">
+        ${rooms.map(r => {
+          const isUsing = r.status === 'using';
+          return `
+            <div class="row" onclick="toggleRoom('${r.id}')">
+              <div class="letter">${r.id}</div>
+              <div class="row-mid">
+                <div class="room-name">部屋 ${r.id}</div>
+                <div class="updated">更新: ${formatDate(r.updatedAt)}</div>
               </div>
-            `;
-          }).join('')}
-        </div>
-        <div class="links">
-          <button onclick="location.hash='qr'">QRコードを表示・印刷</button>
-          <button onclick="renderStatus()">更新する</button>
-        </div>
-        <div class="footer-time">表示: ${formatDate(new Date().toISOString())}</div>
+              <div class="pill ${isUsing ? 'busy' : 'free'}">
+                <div class="dot"></div>${isUsing ? '利用中' : '空き'}
+              </div>
+            </div>
+          `;
+        }).join('')}
       </div>
-    `;
-  }catch(e){
-    app.innerHTML = `<div class="error">データの取得に失敗しました。<br><button onclick="renderStatus()">再試行</button></div>`;
-  }
+      <div class="links">
+        <button onclick="location.hash='qr'">QRコードを表示・印刷</button>
+        <button onclick="refreshStatus()">更新する</button>
+      </div>
+      <div class="footer-time">表示: ${formatDate(new Date().toISOString())}</div>
+    </div>
+  `;
 }
 
-async function renderRoom(roomId, msgOn){
+function paintRoom(roomId, msgOn){
   const app = document.getElementById('app');
-  try{
-    const rooms = await fetchStatus();
-    const room = rooms.find(r => r.id === roomId);
-    if (!room){
-      app.innerHTML = `<div class="error">部屋が見つかりません<br><a class="back" href="#status">一覧に戻る</a></div>`;
-      return;
-    }
-    const isUsing = room.status === 'using';
-    app.innerHTML = `
-      <div class="wrap detail">
-        <div class="eyebrow">9F ・ 休憩室</div>
-        <div class="detail-letter">${room.id}</div>
-        <div class="detail-pill ${isUsing ? 'busy' : 'free'}">
-          <div class="dot"></div>${isUsing ? '利用中' : '空き'}
-        </div>
-        <div>
-          <button id="toggle-btn" class="toggle-btn ${isUsing ? 'to-free' : 'to-busy'}" onclick="toggleRoom('${room.id}')">
-            ${isUsing ? '利用終了にする' : '利用開始にする'}
-          </button>
-        </div>
-        <div class="msg">${msgOn ? '更新しました' : ''}</div>
-        <div class="detail-updated">更新: ${formatDate(room.updatedAt)}</div>
-        <div><a class="back" href="#status">一覧に戻る</a></div>
-      </div>
-    `;
-  }catch(e){
-    app.innerHTML = `<div class="error">データの取得に失敗しました。<br><a class="back" href="#status">戻る</a></div>`;
+  const room = (cachedRooms || []).find(r => r.id === roomId);
+  if (!room){
+    app.innerHTML = `<div class="error">部屋が見つかりません<br><a class="back" href="#status">一覧に戻る</a></div>`;
+    return;
   }
+  const isUsing = room.status === 'using';
+  app.innerHTML = `
+    <div class="wrap detail">
+      <div class="eyebrow">9F ・ 休憩室</div>
+      <div class="detail-letter">${room.id}</div>
+      <div class="detail-pill ${isUsing ? 'busy' : 'free'}">
+        <div class="dot"></div>${isUsing ? '利用中' : '空き'}
+      </div>
+      <div>
+        <button id="toggle-btn" class="toggle-btn ${isUsing ? 'to-free' : 'to-busy'}" onclick="toggleRoom('${room.id}')">
+          ${isUsing ? '利用終了にする' : '利用開始にする'}
+        </button>
+      </div>
+      <div class="msg">${msgOn ? '更新しました' : ''}</div>
+      <div class="detail-updated">更新: ${formatDate(room.updatedAt)}</div>
+      <div><a class="back" href="#status">一覧に戻る</a></div>
+    </div>
+  `;
 }
 
-async function renderQr(){
+function paintQr(){
   const app = document.getElementById('app');
   const base = location.origin + location.pathname;
 
@@ -211,7 +195,6 @@ async function renderQr(){
       <div class="eyebrow">9F ・ BREAK ROOM STATUS</div>
       <div class="title">QRコード</div>
       <div class="sub">各部屋のドアに貼ってください。スキャンで利用中⇔空きが自動的に切り替わります</div>
-
       <div class="qr-grid">
         ${ROOM_IDS.map(id => `
           <div class="qr-card">
@@ -221,7 +204,6 @@ async function renderQr(){
           </div>
         `).join('')}
       </div>
-
       <button class="print-btn" onclick="window.print()">印刷する</button>
       <div class="links" style="margin-top:16px;"><a class="back" href="#status">一覧に戻る</a></div>
     </div>
@@ -242,6 +224,77 @@ async function renderQr(){
   });
 }
 
+// ---- 通信を伴う操作 ----
+
+// トグル操作:先にキャッシュ上のデータを書き換えて即座に画面を更新し、
+// 裏でサーバーに反映します（楽観的UI更新）。これで体感速度が上がります。
+async function toggleRoom(id){
+  if (!cachedRooms){
+    try{ await loadRooms(); }catch(e){ alert('データの取得に失敗しました'); return; }
+  }
+
+  const now = new Date().toISOString();
+  cachedRooms = cachedRooms.map(r => r.id === id
+    ? { ...r, status: r.status === 'empty' ? 'using' : 'empty', updatedAt: now }
+    : r
+  );
+  paintRoom(id, true);
+
+  try{
+    const updated = await fetchToggle(id);
+    cachedRooms = cachedRooms.map(r => r.id === id ? updated : r);
+  }catch(e){
+    // 失敗時は最新状態を取り直して表示をサーバーの実態に合わせる
+    try{ await loadRooms(); }catch(e2){}
+    alert('更新に失敗しました。もう一度お試しください。');
+  }
+
+  // 「更新しました」の表示だけを消す（通信なし）
+  setTimeout(() => paintRoom(id, false), 1500);
+}
+
+// 一覧画面：キャッシュがあれば即座に表示し、裏で最新化する
+async function renderStatus(){
+  if (cachedRooms){
+    paintStatus(cachedRooms);
+  } else {
+    document.getElementById('app').innerHTML = '<div class="loading">読み込み中...</div>';
+  }
+  try{
+    await loadRooms();
+    if (getRoute().page === 'status') paintStatus(cachedRooms);
+  }catch(e){
+    if (!cachedRooms){
+      document.getElementById('app').innerHTML = `<div class="error">データの取得に失敗しました。<br><button onclick="renderStatus()">再試行</button></div>`;
+    }
+  }
+}
+
+// 「更新する」ボタン用：明示的に再取得する
+async function refreshStatus(){
+  cachedRooms = null;
+  await renderStatus();
+}
+
+// 部屋詳細画面：キャッシュがあれば即座に表示し、裏で最新化する
+async function renderRoom(roomId, msgOn){
+  if (cachedRooms){
+    paintRoom(roomId, msgOn);
+  } else {
+    document.getElementById('app').innerHTML = '<div class="loading">読み込み中...</div>';
+    try{
+      await loadRooms();
+      paintRoom(roomId, msgOn);
+    }catch(e){
+      document.getElementById('app').innerHTML = `<div class="error">データの取得に失敗しました。<br><a class="back" href="#status">戻る</a></div>`;
+    }
+  }
+}
+
+async function renderQr(){
+  paintQr();
+}
+
 async function render(){
   const route = getRoute();
   if (route.page === 'room') await renderRoom(route.room, false);
@@ -258,7 +311,7 @@ async function bootstrap(){
     const cameFromApp = sessionStorage.getItem('rsb-internal-nav') === '1';
     sessionStorage.removeItem('rsb-internal-nav');
     if (!cameFromApp){
-      await renderRoom(route.room, false);
+      try{ await loadRooms(); }catch(e){}
       await toggleRoom(route.room);
       return;
     }
@@ -272,7 +325,12 @@ window.addEventListener('hashchange', () => {
 });
 bootstrap();
 
-setInterval(() => { if (getRoute().page === 'status') renderStatus(); }, 15000);
+// 一覧画面を開いている間は15秒ごとに裏で最新化（他の人の変更を反映）
+setInterval(() => {
+  if (getRoute().page === 'status'){
+    loadRooms().then(() => { if (getRoute().page === 'status') paintStatus(cachedRooms); }).catch(() => {});
+  }
+}, 15000);
 </script>
 </body>
 </html>
