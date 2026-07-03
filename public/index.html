@@ -63,11 +63,30 @@
   .back{display:inline-block;margin-top:30px;font-size:12.5px;text-decoration:underline;text-underline-offset:3px;color:var(--ink-faint);}
   .loading{text-align:center;padding:60px 20px;color:var(--ink-faint);font-size:13px;}
   .error{text-align:center;padding:40px 20px;color:var(--busy);font-size:13px;line-height:2;}
+
+  /* QR page */
+  .qr-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .qr-card{background:var(--bg-panel);border-radius:14px;padding:16px 10px 14px;text-align:center;}
+  .qr-card canvas{border-radius:8px;display:block;margin:0 auto 10px;background:#fff;padding:8px;}
+  .qr-room{font-weight:700;font-size:15px;color:var(--amber);}
+  .qr-hint{font-size:10.5px;color:var(--ink-faint);margin-top:2px;}
+  .print-btn{display:block;margin:24px auto 0;font-size:13px;color:var(--ink-soft);border:1px solid var(--bg-panel-raised);padding:10px 18px;border-radius:999px;}
+  .print-btn:hover{color:var(--ink);border-color:var(--ink-faint);}
+
+  @media print{
+    body *{visibility:hidden;}
+    .qr-grid, .qr-grid *{visibility:visible;}
+    .qr-grid{position:absolute;left:0;top:0;width:100%;grid-template-columns:1fr 1fr;gap:24px;padding:24px;}
+    .qr-card{background:#fff;border:1px solid #ddd;break-inside:avoid;}
+    .qr-room{color:#000;}
+    .qr-hint{color:#555;}
+  }
 </style>
 </head>
 <body>
 <div id="app"><div class="loading">読み込み中...</div></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
 <script>
 const ROOM_IDS = ['A','B','C','D'];
 
@@ -83,6 +102,7 @@ function getRoute(){
   const params = new URLSearchParams(hash);
   const room = params.get('room');
   if (room && ROOM_IDS.includes(room)) return { page:'room', room };
+  if (hash === 'qr') return { page:'qr' };
   return { page:'status' };
 }
 
@@ -138,7 +158,10 @@ async function renderStatus(){
             `;
           }).join('')}
         </div>
-        <div class="links"><button onclick="renderStatus()">更新する</button></div>
+        <div class="links">
+          <button onclick="location.hash='qr'">QRコードを表示・印刷</button>
+          <button onclick="renderStatus()">更新する</button>
+        </div>
         <div class="footer-time">表示: ${formatDate(new Date().toISOString())}</div>
       </div>
     `;
@@ -179,14 +202,75 @@ async function renderRoom(roomId, msgOn){
   }
 }
 
+async function renderQr(){
+  const app = document.getElementById('app');
+  const base = location.origin + location.pathname;
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="eyebrow">9F ・ BREAK ROOM STATUS</div>
+      <div class="title">QRコード</div>
+      <div class="sub">各部屋のドアに貼ってください。スキャンで利用中⇔空きが自動的に切り替わります</div>
+
+      <div class="qr-grid">
+        ${ROOM_IDS.map(id => `
+          <div class="qr-card">
+            <canvas id="qr-${id}"></canvas>
+            <div class="qr-room">部屋 ${id}</div>
+            <div class="qr-hint">スキャンで自動切替</div>
+          </div>
+        `).join('')}
+      </div>
+
+      <button class="print-btn" onclick="window.print()">印刷する</button>
+      <div class="links" style="margin-top:16px;"><a class="back" href="#status">一覧に戻る</a></div>
+    </div>
+  `;
+
+  ROOM_IDS.forEach(id => {
+    const canvas = document.getElementById('qr-' + id);
+    if (canvas && window.QRious){
+      new QRious({
+        element: canvas,
+        value: base + '#room=' + id,
+        size: 160,
+        background: '#ffffff',
+        foreground: '#191b21',
+        level: 'M'
+      });
+    }
+  });
+}
+
 async function render(){
   const route = getRoute();
   if (route.page === 'room') await renderRoom(route.room, false);
+  else if (route.page === 'qr') await renderQr();
   else await renderStatus();
 }
 
-window.addEventListener('hashchange', render);
-render();
+// QRコードを読み取って #room=A のようなURLで開いた場合は、
+// ページを表示した時点で自動的に利用中⇔空きを切り替えます。
+// （一覧画面からのタップ遷移では自動切替しません。sessionStorageで区別します）
+async function bootstrap(){
+  const route = getRoute();
+  if (route.page === 'room'){
+    const cameFromApp = sessionStorage.getItem('rsb-internal-nav') === '1';
+    sessionStorage.removeItem('rsb-internal-nav');
+    if (!cameFromApp){
+      await renderRoom(route.room, false);
+      await toggleRoom(route.room);
+      return;
+    }
+  }
+  await render();
+}
+
+window.addEventListener('hashchange', () => {
+  sessionStorage.setItem('rsb-internal-nav', '1');
+  render();
+});
+bootstrap();
 
 setInterval(() => { if (getRoute().page === 'status') renderStatus(); }, 15000);
 </script>
