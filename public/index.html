@@ -250,7 +250,11 @@ async function toggleRoom(id){
   }
 
   // 「更新しました」の表示だけを消す（通信なし）
-  setTimeout(() => paintRoom(id, false), 1500);
+  // ただし、その間に別の画面（一覧など）に移動していたら上書きしない
+  setTimeout(() => {
+    const route = getRoute();
+    if (route.page === 'room' && route.room === id) paintRoom(id, false);
+  }, 1500);
 }
 
 // 一覧画面：キャッシュがあれば即座に表示し、裏で最新化する
